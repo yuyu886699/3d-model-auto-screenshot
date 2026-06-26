@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full lg:h-screen lg:overflow-hidden">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D模型多视角自动截图生成器</title>
+    <!-- Tailwind CSS 用于现代化 UI 布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 FontAwesome 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 引入 Three.js 核心库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- 引入 Three.js GLTFLoader 插件，用于加载 glTF/glb 模型 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <!-- 引入 Three.js OrbitControls 插件，用于鼠标控制相机旋转缩放 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- 引入 JSZip 用于打包下载截图 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        /* 优化滚动条样式，使其不显突兀且支持深色主题 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #09090b; /* zinc-950 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #27272a; /* zinc-800 */
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3f3f46; /* zinc-700 */
+        }
+        .canvas-container {
+            position: relative;
+            box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
+        }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-full lg:h-screen flex flex-col font-sans overflow-x-hidden lg:overflow-hidden selection:bg-zinc-700 selection:text-white">
+
+    <!-- 顶部导航栏 -->
+    <header class="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex flex-wrap items-center justify-between gap-4 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-zinc-800 border border-zinc-700 p-2.5 rounded-lg text-zinc-200 shadow-md shadow-black/50">
+                <i class="fa-solid fa-cube text-xl animate-pulse opacity-80"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-tight bg-gradient-to-r bg-clip-text text-transparent from-white to-zinc-500">3D模型多视角自动截图系统</h1>
+                <p class="text-xs text-zinc-500">支持 GLTF / GLB 格式 · 高清多角度渲染</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <!-- 上传模型按钮 -->
+            <label class="cursor-pointer bg-orange-600 hover:bg-orange-500 active:scale-95 transition-all text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-orange-600/20">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <span>上传本地模型</span>
+                <input type="file" id="model-upload" accept=".gltf,.glb" class="hidden">
+            </label>
+            <!-- 恢复默认测试模型 -->
+            <button id="reset-test-model" class="bg-zinc-800 hover:bg-zinc-700 active:scale-95 text-zinc-300 border border-zinc-700 px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2">
+                <i class="fa-solid fa-arrows-rotate"></i>
+                <span>重置默认模型</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主体内容区域 (在桌面端通过 flex-1 min-h-0 精确填充屏幕剩余高度，防溢出) -->
+    <main class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-y-auto lg:overflow-hidden">
+        
+        <!-- 左侧：参数控制区 (占 3 列，桌面端固定高度，内容滚动，底部按钮常驻) -->
+        <section class="lg:col-span-3 flex flex-col gap-4 h-full min-h-0 overflow-hidden">
+            
+            <!-- 可滚动的设置面板区 (Flex-1 占据剩余空间) -->
+            <div class="flex-1 overflow-y-auto flex flex-col gap-5 pr-1 pb-2 min-h-0">
+                
+                <!-- 控制卡片一：自定义角度配置器 -->
+                <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl flex flex-col gap-4 shrink-0">
+                    <h2 class="text-sm font-bold text-zinc-400 tracking-wider uppercase flex items-center justify-between">
+                    <span class="flex items-center gap-2">
+                        <i class="fa-solid fa-compass text-zinc-300 animate-spin-slow"></i> 视角维度管理器
+                    </span>
+                    <span id="view-count-badge" class="text-xs bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded text-zinc-300">8</span>
+                </h2>
+
+                <!-- 视口动作：一键保存当前预览视角 -->
+                <button id="btn-save-current" class="w-full bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700 hover:border-zinc-500 text-zinc-300 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-2 transition-all">
+                    <i class="fa-solid fa-circle-dot"></i>
+                    <span>保存当前预览角度</span>
+                </button>
+
+                <!-- 视角展示列表 -->
+                <div class="border-t border-zinc-800/80 pt-3">
+                    <label class="block text-xs font-semibold text-zinc-500 mb-2">已配置的截图视角 (点击可在中间预览)</label>
+                    <div id="views-list-container" class="space-y-1.5 max-h-[450px] overflow-y-auto pr-1">
+                        <!-- 动态渲染视角项 -->
+                    </div>
+                </div>
+
+                <!-- 手动新增自定义视角 -->
+                <div class="border-t border-zinc-800/80 pt-3 bg-zinc-950/40 p-2.5 rounded-lg border border-zinc-800">
+                    <span class="text-xs font-semibold text-zinc-400 block mb-2"><i class="fa-solid fa-plus text-zinc-500"></i> 手动增加精确视角</span>
+                    <div class="grid grid-cols-3 gap-2 mb-2">
+                        <div>
+                            <span class="text-[10px] text-zinc-500 block mb-0.5">X 轴向量</span>
+                            <input type="number" id="add-view-x" value="1.0" step="0.1" class="w-full bg-zinc-950 border border-zinc-800 rounded px-1.5 py-1 text-xs text-center font-mono focus:border-zinc-500 focus:outline-none text-zinc-300">
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-zinc-500 block mb-0.5">Y 轴向量</span>
+                            <input type="number" id="add-view-y" value="1.0" step="0.1" class="w-full bg-zinc-950 border border-zinc-800 rounded px-1.5 py-1 text-xs text-center font-mono focus:border-zinc-500 focus:outline-none text-zinc-300">
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-zinc-500 block mb-0.5">Z 轴向量</span>
+                            <input type="number" id="add-view-z" value="1.0" step="0.1" class="w-full bg-zinc-950 border border-zinc-800 rounded px-1.5 py-1 text-xs text-center font-mono focus:border-zinc-500 focus:outline-none text-zinc-300">
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="add-view-name" placeholder="视角命名,如:斜侧俯角" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-zinc-500 text-zinc-300">
+                        <button id="btn-add-view" class="bg-zinc-800 hover:bg-zinc-700 active:scale-95 text-zinc-200 px-3 py-1 rounded-lg text-xs font-bold transition-all border border-zinc-600">添加</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 控制卡片二：输出设置 -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl shrink-0">
+                <h2 class="text-sm font-bold text-zinc-400 mb-4 tracking-wider uppercase flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-zinc-300"></i> 渲染输出设置
+                </h2>
+                
+                <!-- 截图分辨率 -->
+                <div class="mb-4">
+                    <label class="block text-xs font-semibold text-zinc-500 mb-2">截图分辨率 (1:1 正方形)</label>
+                    <select id="setting-resolution" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 text-zinc-200">
+                        <option value="512">512 x 512 (普通)</option>
+                        <option value="1024" selected>1024 x 1024 (清晰)</option>
+                        <option value="2048">2048 x 2048 (超清/速度略慢)</option>
+                    </select>
+                </div>
+
+                <!-- 背景模式 -->
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-500 mb-2">截图背景色</label>
+                    <div class="grid grid-cols-3 gap-2 mb-2">
+                        <button id="bg-transparent" class="bg-zinc-800 border border-zinc-500 rounded-lg p-2 text-xs flex flex-col items-center gap-1 text-zinc-100 transition-all hover:bg-zinc-700">
+                            <i class="fa-solid fa-border-none"></i>
+                            <span>透明</span>
+                        </button>
+                        <button id="bg-dark" class="bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-xs flex flex-col items-center gap-1 text-zinc-400 transition-all hover:border-zinc-600">
+                            <i class="fa-solid fa-square text-black"></i>
+                            <span>深灰</span>
+                        </button>
+                        <button id="bg-light" class="bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-xs flex flex-col items-center gap-1 text-zinc-400 transition-all hover:border-zinc-600">
+                            <i class="fa-solid fa-square text-white"></i>
+                            <span>明亮</span>
+                        </button>
+                    </div>
+                    <!-- 自定义颜色选择器 -->
+                    <div id="custom-color-container" class="flex items-center gap-2 mt-2 hidden">
+                        <span class="text-xs text-zinc-500">自定义颜色:</span>
+                        <input type="color" id="setting-bg-color" value="#18181b" class="bg-transparent border-0 w-8 h-8 cursor-pointer rounded">
+                        <span id="color-hex" class="text-xs text-zinc-400 font-mono">#18181B</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 控制卡片三：灯光参数 -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl shrink-0">
+                <h2 class="text-sm font-bold text-zinc-400 mb-4 tracking-wider uppercase flex items-center gap-2">
+                    <i class="fa-solid fa-lightbulb text-zinc-300"></i> 环境灯光调整
+                </h2>
+                <!-- 环境光强度 -->
+                <div class="mb-4">
+                    <label class="block text-xs font-semibold text-zinc-500 mb-1 flex justify-between">
+                        <span>环境光强度</span>
+                        <span id="ambient-intensity-val" class="font-mono text-zinc-300">3.0</span>
+                    </label>
+                    <input type="range" id="setting-ambient" min="0" max="3" step="0.1" value="3.0" class="w-full accent-orange-500 bg-zinc-950 rounded-lg h-2 appearance-none cursor-pointer">
+                </div>
+                <!-- 主光源强度 -->
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-500 mb-1 flex justify-between">
+                        <span>主平行光强度</span>
+                        <span id="directional-intensity-val" class="font-mono text-zinc-300">1.8</span>
+                    </label>
+                    <input type="range" id="setting-directional" min="0" max="4" step="0.1" value="1.8" class="w-full accent-orange-500 bg-zinc-950 rounded-lg h-2 appearance-none cursor-pointer">
+                </div>
+            </div>
+
+            </div> <!-- 结束可滚动的设置面板区 -->
+
+            <!-- 操作按钮 (独立于滚动区外部，始终吸底展示) -->
+            <button id="btn-generate" class="w-full bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-orange-900/30 flex items-center justify-center gap-2 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 shrink-0 mt-auto">
+                <i class="fa-solid fa-camera-retro text-lg"></i>
+                <span>立即自动多视角截图</span>
+            </button>
+        </section>
+
+        <!-- 中间：3D 实时预览区 (占 5 列) -->
+        <section class="lg:col-span-5 flex flex-col gap-4 h-[450px] lg:h-full min-h-0">
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl flex-1 flex flex-col overflow-hidden relative shadow-xl">
+                <!-- 顶部视图标签 -->
+                <div class="px-4 py-3 bg-zinc-900/80 border-b border-zinc-800 flex items-center justify-between z-10 shrink-0">
+                    <span class="text-xs font-bold text-zinc-400 tracking-wider uppercase flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-zinc-400 animate-pulse"></span>
+                        3D 实时预览（可拖入文件、鼠标旋转缩放）
+                    </span>
+                    <span id="model-name-badge" class="text-xs bg-zinc-800 border border-zinc-700 px-2 py-1 rounded text-zinc-300 font-mono truncate max-w-[200px]">
+                        默认艺术几何体
+                    </span>
+                </div>
+
+                <!-- ThreeJS Canvas 挂载点 -->
+                <div id="canvas-wrapper" class="flex-1 w-full h-full relative bg-zinc-950 flex items-center justify-center min-h-0">
+                    
+                    <!-- 实时相机角度 HUD 浮窗面板 -->
+                    <div id="hud-panel" class="absolute top-4 right-4 bg-zinc-900/90 border border-zinc-800/80 p-3 rounded-lg z-15 shadow-2xl text-[11px] font-mono w-56 flex flex-col gap-1.5 pointer-events-auto transition-all backdrop-blur-sm">
+                        <div class="flex items-center justify-between border-b border-zinc-800/80 pb-1.5">
+                            <span class="text-zinc-300 font-bold tracking-wide flex items-center gap-1">
+                                <i class="fa-solid fa-gauge-high"></i> 相机角度 HUD
+                            </span>
+                            <button id="hud-btn-save" class="bg-orange-600 hover:bg-orange-500 border border-orange-500 text-white font-sans font-bold px-2 py-0.5 rounded text-[10px] transition-colors" title="快速保存此视角">
+                                <i class="fa-solid fa-camera"></i> 捕捉
+                            </button>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">归一向量 (Dir):</span>
+                            <span id="hud-dir" class="text-zinc-200 font-semibold">[0.0, 0.0, 0.0]</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">世界坐标 (Pos):</span>
+                            <span id="hud-pos" class="text-zinc-300 font-semibold">[0.0, 0.0, 0.0]</span>
+                        </div>
+                        <div class="flex justify-between border-t border-zinc-800/40 pt-1 mt-0.5">
+                            <span class="text-zinc-500">仰角 (Pitch):</span>
+                            <span id="hud-pitch" class="text-zinc-300 font-semibold">0.0°</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-500">偏航 (Yaw):</span>
+                            <span id="hud-yaw" class="text-zinc-300 font-semibold">0.0°</span>
+                        </div>
+                    </div>
+
+                    <!-- 加载遮罩层 -->
+                    <div id="loader-overlay" class="absolute inset-0 bg-zinc-950/80 z-20 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 pointer-events-none opacity-0">
+                        <i class="fa-solid fa-circle-notch fa-spin text-4xl text-zinc-400"></i>
+                        <p id="loader-text" class="text-sm font-semibold text-zinc-300">正在处理模型，请稍候...</p>
+                    </div>
+                    
+                    <!-- 拖拽上传遮罩层 -->
+                    <div id="drag-overlay" class="absolute inset-0 bg-zinc-950/90 border-4 border-dashed border-zinc-500 m-4 rounded-xl z-20 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 pointer-events-none opacity-0">
+                        <i class="fa-solid fa-cloud-arrow-up text-5xl text-zinc-300 animate-bounce"></i>
+                        <p class="text-base font-bold text-zinc-200">松开鼠标导入 3D 模型</p>
+                        <p class="text-xs text-zinc-400">支持单个 .glb 或 .gltf 文件</p>
+                    </div>
+
+                    <!-- 真实的 Canvas 将在此渲染 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 右侧：截图画廊展示区 (占 4 列，在桌面端保持 h-full 和 overflow-hidden) -->
+        <section class="lg:col-span-4 flex flex-col gap-4 h-[500px] lg:h-full min-h-0 overflow-hidden">
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl flex-1 flex flex-col overflow-hidden shadow-xl min-h-0">
+                <!-- 头部操作栏 -->
+                <div class="px-5 py-4 bg-zinc-900/80 border-b border-zinc-800 flex items-center justify-between shrink-0">
+                    <div>
+                        <h2 class="text-sm font-bold text-zinc-300 flex items-center gap-2">
+                            <i class="fa-solid fa-images text-zinc-400"></i> 截图结果画廊
+                        </h2>
+                        <p class="text-[10px] text-zinc-500">共 <span id="gallery-count">0</span> 张截图</p>
+                    </div>
+                    <button id="btn-download-all" disabled class="bg-orange-600 hover:bg-orange-500 text-white disabled:bg-zinc-800 disabled:text-zinc-600 disabled:border-zinc-700 border border-transparent disabled:border disabled:cursor-not-allowed px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all">
+                        <i class="fa-solid fa-download"></i>
+                        <span>打包下载 ZIP</span>
+                    </button>
+                </div>
+
+                <!-- 画廊网络列表 (开启双向溢出滚动，内部设置固定尺寸的一行3个) -->
+                <div class="flex-1 overflow-auto bg-zinc-950/50 min-h-0">
+                    <div id="gallery-grid" class="p-4 grid grid-cols-[repeat(3,160px)] gap-3 w-max min-w-full place-content-start">
+                        <!-- 占位状态 -->
+                        <div id="gallery-placeholder" class="col-span-3 flex flex-col items-center justify-center py-20 text-zinc-600 w-full">
+                            <i class="fa-solid fa-camera text-4xl mb-3 opacity-30"></i>
+                            <p class="text-sm">暂无截图</p>
+                            <p class="text-xs text-zinc-500 mt-1">请点击左下角按钮生成截图</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 弹窗：大图查看器 -->
+    <div id="modal-viewer" class="fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+        <button id="modal-close" class="absolute top-6 right-6 text-zinc-500 hover:text-white text-3xl transition-colors">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+        <div class="max-w-4xl max-h-[80vh] flex items-center justify-center overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+            <img id="modal-img" src="" alt="预览图" class="object-contain max-w-full max-h-[75vh]">
+        </div>
+        <div class="mt-4 flex flex-col items-center gap-2">
+            <h3 id="modal-title" class="text-lg font-bold text-zinc-200">视角名称</h3>
+            <a id="modal-download" href="#" download="" class="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all">
+                <i class="fa-solid fa-download"></i>下载此视角
+            </a>
+        </div>
+    </div>
+
+    <!-- 自定义 Toast 提示组件 -->
+    <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-zinc-800 border border-zinc-700 px-4 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-3 transition-all duration-300 translate-y-12 opacity-0 pointer-events-none">
+        <i id="toast-icon" class="fa-solid fa-circle-check text-zinc-200"></i>
+        <span id="toast-text" class="text-xs text-zinc-200 font-medium">提示信息</span>
+    </div>
+
+    <!-- 业务逻辑脚本 -->
+    <script>
+        // --- 全局组件和状态定义 ---
+        let scene, camera, renderer, controls;
+        let mainModel = null;          // 当前加载的 3D 模型
+        let defaultModel = null;       // 默认展示的测试模型
+        let headlight;                 // 跟随相机移动的主平行光源
+        let ambientLight;              // 全局环境光源
+        
+        // 渲染设置状态
+        let currentBgMode = 'transparent'; // 'transparent' | 'dark' | 'light' | 'custom'
+        let currentResolution = 1024;
+        let zoomFactor = 1.2;          // 截图镜头拉伸程度，默认固定为完美视角占比
+        
+        // 保存截图数据用于打包下载
+        let generatedImages = []; // Array of { name, dataUrl }
+
+        // 默认视角配置列表（用户可以删除、新增，支持动态渲染）
+        let viewConfigs = [
+            { id: "v1", name: "前视图_Front", pos: [0, 0, 1], up: [0, 1, 0], isDefault: true },
+            { id: "v2", name: "后视图_Back", pos: [0, 0, -1], up: [0, 1, 0], isDefault: true },
+            { id: "v3", name: "左视图_Left", pos: [-1, 0, 0], up: [0, 1, 0], isDefault: true },
+            { id: "v4", name: "右视图_Right", pos: [1, 0, 0], up: [0, 1, 0], isDefault: true },
+            { id: "v5", name: "顶视图_Top", pos: [0, 1, 0], up: [0, 0, -1], isDefault: true },
+            { id: "v6", name: "底视图_Bottom", pos: [0, -1, 0], up: [0, 0, 1], isDefault: true },
+            { id: "v7", name: "前等轴测_Iso_Front", pos: [1, 0.7, 1], up: [0, 1, 0], isDefault: true },
+            { id: "v8", name: "后等轴测_Iso_Back", pos: [-1, 0.5, -1], up: [0, 1, 0], isDefault: true }
+        ];
+
+        // --- 初始化 ThreeJS 环境 ---
+        function initThree() {
+            const container = document.getElementById('canvas-wrapper');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // 创建场景
+            scene = new THREE.Scene();
+            
+            // 创建相机 (透视相机)
+            camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+            camera.position.set(6, 4, 8);
+
+            // 创建 WebGL 渲染器 (开启 preserveDrawingBuffer 必须，否则截图会黑屏)
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            container.appendChild(renderer.domElement);
+
+            // 添加轨道控制器
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI; // 允许全方位旋转
+
+            // 添加灯光
+            ambientLight = new THREE.AmbientLight(0xffffff, 3.0);
+            scene.add(ambientLight);
+
+            // 这是一个始终对准摄像机射出的主定向光，确保任何角度观察和截图都没有阴影死角
+            headlight = new THREE.DirectionalLight(0xffffff, 1.8);
+            scene.add(headlight);
+
+            // 增加基础点缀光源提供立体感 (纯白冷光)
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+            fillLight.position.set(-5, 3, -5);
+            scene.add(fillLight);
+
+            // 生成默认的酷炫测试3D几何体
+            createDefaultTestModel();
+
+            // 运行渲染动画循环
+            animate();
+
+            // 监听窗口大小变化
+            window.addEventListener('resize', onWindowResize);
+            
+            // 初始化视角管理器 UI
+            renderViewsList();
+        }
+
+        // 动画渲染循环
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 实时更新控制器
+            controls.update();
+            
+            // 保持主光源跟相机方向一致
+            if (headlight && camera) {
+                headlight.position.copy(camera.position);
+            }
+
+            renderer.render(scene, camera);
+
+            // 实时采集相机参数并更新 HUD
+            updateCameraHUD();
+        }
+
+        // --- HUD 参数更新 ---
+        function updateCameraHUD() {
+            if (!camera) return;
+
+            // 1. 获取归一化方向向量 (相机的绝对观测方向)
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            // 我们的视角定义中，pos 是相机的位置。相对模型的方向向量是相机的 position 归一化值
+            const normPos = camera.position.clone().normalize();
+
+            document.getElementById('hud-dir').textContent = 
+                `[${normPos.x.toFixed(2)}, ${normPos.y.toFixed(2)}, ${normPos.z.toFixed(2)}]`;
+
+            // 2. 获取世界位置
+            document.getElementById('hud-pos').textContent = 
+                `[${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}]`;
+
+            // 3. 计算 Pitch (仰角) 和 Yaw (偏航角)
+            const distance = camera.position.length();
+            const theta = Math.atan2(camera.position.x, camera.position.z); // 偏航角
+            const phi = Math.acos(Math.max(-1, Math.min(1, camera.position.y / distance))); // 极角
+
+            const pitchDeg = Math.round((Math.PI / 2 - phi) * (180 / Math.PI));
+            const yawDeg = Math.round(theta * (180 / Math.PI));
+
+            document.getElementById('hud-pitch').textContent = `${pitchDeg}°`;
+            document.getElementById('hud-yaw').textContent = `${yawDeg}°`;
+        }
+
+        // 窗口大小适配
+        function onWindowResize() {
+            const container = document.getElementById('canvas-wrapper');
+            if(!container) return;
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        // --- 生成内置默认几何模型 ---
+        function createDefaultTestModel() {
+            if (mainModel) scene.remove(mainModel);
+
+            const geometry = new THREE.TorusKnotGeometry(1.6, 0.5, 120, 16);
+            // 修改为高级灰色
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x71717a, 
+                metalness: 0.8,
+                roughness: 0.2,
+                envMapIntensity: 1.0
+            });
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            const wireframeGeom = new THREE.TorusKnotGeometry(1.6, 0.5, 120, 16);
+            // 修改为浅灰色线框
+            const wireframeMat = new THREE.MeshBasicMaterial({
+                color: 0xd4d4d8,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.25
+            });
+            const wireframe = new THREE.Mesh(wireframeGeom, wireframeMat);
+            mesh.add(wireframe);
+
+            defaultModel = mesh;
+            mainModel = mesh;
+            scene.add(mainModel);
+            
+            adjustCameraToFitModel();
+            
+            document.getElementById('model-name-badge').textContent = "内置金属几何体";
+        }
+
+        // --- 核心算法：自动计算模型包围盒，自适应居中并缩放 ---
+        function adjustCameraToFitModel() {
+            if (!mainModel) return;
+
+            mainModel.updateMatrixWorld();
+
+            const box = new THREE.Box3().setFromObject(mainModel);
+            const center = new THREE.Vector3();
+            box.getCenter(center);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+
+            mainModel.position.sub(center);
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            cameraZ *= zoomFactor;
+
+            camera.position.set(cameraZ * 0.8, cameraZ * 0.6, cameraZ * 1.1);
+            camera.lookAt(0, 0, 0);
+            
+            controls.target.set(0, 0, 0);
+            
+            camera.near = maxDim / 100;
+            camera.far = maxDim * 100;
+            camera.updateProjectionMatrix();
+        }
+
+        // --- 切换视图相机对齐（支持平滑缓动） ---
+        function alignCameraToView(pos, up) {
+            if (!mainModel) return;
+
+            const box = new THREE.Box3().setFromObject(mainModel);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let targetDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            targetDistance *= zoomFactor;
+
+            const dir = new THREE.Vector3(pos[0], pos[1], pos[2]).normalize();
+            const targetPos = dir.multiplyScalar(targetDistance);
+
+            let steps = 20;
+            let currentStep = 0;
+            
+            const startPos = camera.position.clone();
+            const startUp = camera.up.clone();
+
+            const targetUp = new THREE.Vector3(up[0], up[1], up[2]);
+
+            const transitionInterval = setInterval(() => {
+                currentStep++;
+                const ratio = currentStep / steps;
+                const easeRatio = Math.sin(ratio * Math.PI / 2);
+
+                camera.position.lerpVectors(startPos, targetPos, easeRatio);
+                camera.up.lerpVectors(startUp, targetUp, easeRatio);
+                camera.lookAt(0, 0, 0);
+                controls.target.set(0, 0, 0);
+
+                if (currentStep >= steps) {
+                    clearInterval(transitionInterval);
+                    camera.position.copy(targetPos);
+                    camera.up.copy(targetUp);
+                    camera.lookAt(0, 0, 0);
+                    controls.target.set(0, 0, 0);
+                    showToast("已成功对齐选定的截图视角！");
+                }
+            }, 16);
+        }
+
+        // --- 渲染左侧视角管理列表 ---
+        function renderViewsList() {
+            const container = document.getElementById('views-list-container');
+            container.innerHTML = '';
+
+            document.getElementById('view-count-badge').textContent = viewConfigs.length;
+
+            viewConfigs.forEach((view) => {
+                const item = document.createElement('div');
+                item.className = "flex items-center justify-between p-2 bg-zinc-950/60 hover:bg-zinc-800/50 rounded-lg border border-zinc-800/80 hover:border-zinc-600 group transition-all cursor-pointer";
+                
+                item.onclick = (e) => {
+                    if (e.target.closest('.btn-delete-view')) return;
+                    alignCameraToView(view.pos, view.up || [0, 1, 0]);
+                };
+
+                const isChineseName = view.name.split('_')[0];
+                const cleanName = isChineseName || view.name;
+
+                item.innerHTML = `
+                    <div class="flex items-center gap-2 truncate">
+                        <span class="w-1.5 h-1.5 rounded-full ${view.isDefault ? 'bg-zinc-400' : 'bg-zinc-600'}"></span>
+                        <div class="truncate">
+                            <p class="text-xs font-semibold text-zinc-300 truncate">${cleanName}</p>
+                            <p class="text-[9px] text-zinc-500 font-mono">[${view.pos[0].toFixed(1)}, ${view.pos[1].toFixed(1)}, ${view.pos[2].toFixed(1)}]</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <button class="text-zinc-500 hover:text-zinc-300 text-[10px] px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" title="点击预览此角度">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                        ${!view.isDefault ? `
+                        <button class="btn-delete-view text-zinc-500 hover:text-red-400 p-1 rounded transition-colors text-[10px]" title="删除该视角">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                        ` : ''}
+                    </div>
+                `;
+
+                const deleteBtn = item.querySelector('.btn-delete-view');
+                if (deleteBtn) {
+                    deleteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteViewConfig(view.id);
+                    });
+                }
+
+                container.appendChild(item);
+            });
+        }
+
+        // --- 添加一个视角 ---
+        function addViewConfig(name, pos, up = [0, 1, 0]) {
+            if (!name) {
+                showToast("视角命名不能为空！");
+                return;
+            }
+
+            const isDuplicateName = viewConfigs.some(v => v.name === name);
+            if (isDuplicateName) {
+                showToast("该视角名称已存在！");
+                return;
+            }
+
+            const newId = 'v_' + Date.now();
+            viewConfigs.push({
+                id: newId,
+                name: name,
+                pos: pos,
+                up: up,
+                isDefault: false
+            });
+
+            renderViewsList();
+            showToast(`视角 "${name}" 保存成功！`);
+        }
+
+        // --- 一键保存当前相机位置为视角 ---
+        function saveCurrentCameraAsView() {
+            if (!camera) return;
+
+            const normPos = camera.position.clone().normalize();
+            const currentUp = camera.up.clone().toArray();
+
+            const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const viewName = `视角_${timestamp}`;
+
+            addViewConfig(viewName, [normPos.x, normPos.y, normPos.z], currentUp);
+        }
+
+        // --- 删除特定的视角 ---
+        function deleteViewConfig(id) {
+            viewConfigs = viewConfigs.filter(v => v.id !== id);
+            renderViewsList();
+            showToast("视角删除成功！");
+        }
+
+        // --- 模型上传文件解析器 ---
+        function handleModelUpload(file) {
+            if (!file) return;
+
+            showLoader(true, `正在解析 3D 模型 "${file.name}"...`);
+
+            const url = URL.createObjectURL(file);
+            const loader = new THREE.GLTFLoader();
+
+            loader.load(url, function (gltf) {
+                if (mainModel) scene.remove(mainModel);
+
+                mainModel = gltf.scene;
+
+                mainModel.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (child.material) {
+                            child.material.side = THREE.DoubleSide;
+                        }
+                    }
+                });
+
+                scene.add(mainModel);
+                adjustCameraToFitModel();
+                document.getElementById('model-name-badge').textContent = file.name;
+                
+                showLoader(false);
+                showToast("模型导入成功！");
+                URL.revokeObjectURL(url);
+            }, 
+            function (xhr) {
+                if (xhr.total > 0) {
+                    const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                    showLoader(true, `正在下载并载入模型: ${percent}%`);
+                }
+            }, 
+            function (error) {
+                console.error(error);
+                showLoader(false);
+                showToast("模型载入失败，请确认文件是否为单文件合法的 .gltf/.glb 格式！");
+            });
+        }
+
+        // --- 核心功能：自动多视角截图渲染控制 ---
+        function captureAllViews() {
+            if (!mainModel) {
+                showToast("未检测到 3D 模型！");
+                return;
+            }
+
+            showLoader(true, "正在调整视角捕捉渲染...");
+            generatedImages = []; 
+
+            const box = new THREE.Box3().setFromObject(mainModel);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            const maxDim = Math.max(size.x, size.y, size.z);
+            
+            const fov = camera.fov * (Math.PI / 180);
+            let targetDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            targetDistance *= zoomFactor;
+
+            const captureRenderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true,
+                preserveDrawingBuffer: true
+            });
+            captureRenderer.setSize(currentResolution, currentResolution);
+            captureRenderer.toneMapping = renderer.toneMapping;
+            captureRenderer.toneMappingExposure = renderer.toneMappingExposure;
+
+            setRendererBackground(captureRenderer, currentBgMode);
+
+            const captureCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+            captureCamera.near = maxDim / 100;
+            captureCamera.far = maxDim * 100;
+            captureCamera.updateProjectionMatrix();
+
+            scene.remove(headlight);
+            captureCamera.add(headlight);
+            scene.add(captureCamera);
+
+            setTimeout(() => {
+                viewConfigs.forEach((view) => {
+                    const positionMultiplier = targetDistance;
+                    const dir = new THREE.Vector3(view.pos[0], view.pos[1], view.pos[2]).normalize();
+                    
+                    const upVector = view.up || [0, 1, 0];
+                    captureCamera.position.copy(dir).multiplyScalar(positionMultiplier);
+                    captureCamera.up.set(upVector[0], upVector[1], upVector[2]);
+                    captureCamera.lookAt(0, 0, 0);
+
+                    headlight.position.set(0, 0, 1);
+
+                    captureRenderer.render(scene, captureCamera);
+
+                    const dataUrl = captureRenderer.domElement.toDataURL("image/png");
+                    generatedImages.push({
+                        name: view.name,
+                        dataUrl: dataUrl
+                    });
+                });
+
+                captureCamera.remove(headlight);
+                scene.remove(captureCamera);
+                
+                headlight.position.copy(camera.position);
+                scene.add(headlight);
+
+                captureRenderer.dispose();
+
+                renderGallery();
+                showLoader(false);
+                showToast("所有配置视角的高清截图生成成功！");
+            }, 300);
+        }
+
+        function setRendererBackground(targetRenderer, mode) {
+            const hexColor = document.getElementById('setting-bg-color').value;
+            
+            switch (mode) {
+                case 'transparent':
+                    targetRenderer.setClearColor(0x000000, 0);
+                    break;
+                case 'dark':
+                    targetRenderer.setClearColor(0x09090b, 1);
+                    break;
+                case 'light':
+                    targetRenderer.setClearColor(0xf4f4f5, 1);
+                    break;
+                case 'custom':
+                    targetRenderer.setClearColor(new THREE.Color(hexColor), 1);
+                    break;
+            }
+        }
+
+        // --- 渲染画廊 HTML 卡片 ---
+        function renderGallery() {
+            const grid = document.getElementById('gallery-grid');
+            const placeholder = document.getElementById('gallery-placeholder');
+            const downloadAllBtn = document.getElementById('btn-download-all');
+            const countText = document.getElementById('gallery-count');
+
+            const cards = grid.querySelectorAll('.gallery-card');
+            cards.forEach(card => card.remove());
+
+            if (generatedImages.length === 0) {
+                placeholder.classList.remove('hidden');
+                downloadAllBtn.disabled = true;
+                countText.textContent = "0";
+                return;
+            }
+
+            placeholder.classList.add('hidden');
+            downloadAllBtn.disabled = false;
+            countText.textContent = generatedImages.length;
+
+            generatedImages.forEach((img, index) => {
+                const viewChineseName = img.name.split('_')[0];
+
+                const card = document.createElement('div');
+                card.className = "gallery-card bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group hover:border-zinc-500 transition-all flex flex-col relative";
+                card.innerHTML = `
+                    <div class="w-full aspect-square bg-zinc-950 relative overflow-hidden cursor-pointer" onclick="openModal('${img.name}', ${index})">
+                        ${currentBgMode === 'transparent' ? `
+                        <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(#fff 1px, transparent 1px); background-size: 8px 8px;"></div>
+                        ` : ''}
+                        <img src="${img.dataUrl}" alt="${img.name}" class="absolute inset-0 m-auto object-contain w-[95%] h-[95%] transform group-hover:scale-105 transition-transform duration-300">
+                        <div class="absolute inset-0 bg-zinc-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                            <span class="bg-orange-600/90 hover:bg-orange-500 border border-orange-500 text-white p-2 rounded-full text-xs shadow-md">
+                                <i class="fa-solid fa-magnifying-glass-plus"></i>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="p-2 border-t border-zinc-800/60 bg-zinc-900/40 flex items-center justify-between gap-1 mt-auto">
+                        <span class="text-xs font-semibold text-zinc-300 truncate" title="${img.name}">${viewChineseName}</span>
+                        <a href="${img.dataUrl}" download="${img.name}.png" class="text-zinc-500 hover:text-white p-1 rounded transition-colors text-xs" title="下载此单张图">
+                            <i class="fa-solid fa-download"></i>
+                        </a>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // --- 全视图 ZIP 打包下载逻辑 ---
+        function downloadAllAsZip() {
+            if (generatedImages.length === 0) return;
+
+            showLoader(true, "正在构建 ZIP 压缩包...");
+
+            const zip = new JSZip();
+            const modelName = document.getElementById('model-name-badge').textContent.replace(/\s+/g, '_').split('.')[0];
+            const folder = zip.folder(`${modelName}_截图合集`);
+
+            generatedImages.forEach((img) => {
+                const base64Data = img.dataUrl.split(',')[1];
+                folder.file(`${img.name}.png`, base64Data, { base64: true });
+            });
+
+            zip.generateAsync({ type: "blob" }).then(function (content) {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = `${modelName}_多视角截图.zip`;
+                link.click();
+                
+                URL.revokeObjectURL(link.href);
+                showLoader(false);
+                showToast("打包下载成功！");
+            }).catch(err => {
+                console.error(err);
+                showLoader(false);
+                showToast("打包失败，请尝试逐个单张保存！");
+            });
+        }
+
+        // --- UI 操作 ---
+        function showLoader(show, text = "正在加载，请稍候...") {
+            const overlay = document.getElementById('loader-overlay');
+            const txt = document.getElementById('loader-text');
+            if (show) {
+                txt.textContent = text;
+                overlay.classList.remove('opacity-0', 'pointer-events-none');
+                overlay.classList.add('opacity-100');
+            } else {
+                overlay.classList.remove('opacity-100');
+                overlay.classList.add('opacity-0', 'pointer-events-none');
+            }
+        }
+
+        function showToast(text) {
+            const toast = document.getElementById('toast');
+            const txt = document.getElementById('toast-text');
+
+            txt.textContent = text;
+            toast.classList.remove('opacity-0', 'translate-y-12', 'pointer-events-none');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', 'translate-y-12', 'pointer-events-none');
+            }, 3000);
+        }
+
+        window.openModal = function (name, index) {
+            const modal = document.getElementById('modal-viewer');
+            const img = document.getElementById('modal-img');
+            const title = document.getElementById('modal-title');
+            const download = document.getElementById('modal-download');
+
+            const item = generatedImages[index];
+            if (!item) return;
+
+            img.src = item.dataUrl;
+            title.textContent = item.name.split('_')[0] + " (高清原图预览)";
+            download.href = item.dataUrl;
+            download.download = `${item.name}.png`;
+
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('modal-viewer');
+            modal.classList.add('opacity-0', 'pointer-events-none');
+        }
+
+        // --- DOM 事件绑定 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            initThree();
+
+            const uploadInput = document.getElementById('model-upload');
+            uploadInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) handleModelUpload(file);
+            });
+
+            const canvasWrapper = document.getElementById('canvas-wrapper');
+            const dragOverlay = document.getElementById('drag-overlay');
+
+            canvasWrapper.addEventListener('dragenter', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragOverlay.classList.remove('opacity-0', 'pointer-events-none');
+                dragOverlay.classList.add('opacity-100');
+            });
+
+            canvasWrapper.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            canvasWrapper.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.relatedTarget === null || !canvasWrapper.contains(e.relatedTarget)) {
+                    dragOverlay.classList.remove('opacity-100');
+                    dragOverlay.classList.add('opacity-0', 'pointer-events-none');
+                }
+            });
+
+            canvasWrapper.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragOverlay.classList.remove('opacity-100');
+                dragOverlay.classList.add('opacity-0', 'pointer-events-none');
+
+                const files = e.dataTransfer.files;
+                if (files && files.length > 0) {
+                    const file = files[0];
+                    const extension = file.name.split('.').pop().toLowerCase();
+                    if (extension === 'glb' || extension === 'gltf') {
+                        handleModelUpload(file);
+                    } else {
+                        showToast("仅支持拖入单文件 .glb 或 .gltf 格式的 3D 模型！");
+                    }
+                }
+            });
+
+            document.getElementById('reset-test-model').addEventListener('click', () => {
+                createDefaultTestModel();
+                showToast("已成功还原默认金属几何测试模型");
+            });
+
+            document.getElementById('btn-save-current').addEventListener('click', saveCurrentCameraAsView);
+            document.getElementById('hud-btn-save').addEventListener('click', saveCurrentCameraAsView);
+
+            document.getElementById('btn-add-view').addEventListener('click', () => {
+                const x = parseFloat(document.getElementById('add-view-x').value) || 0;
+                const y = parseFloat(document.getElementById('add-view-y').value) || 0;
+                const z = parseFloat(document.getElementById('add-view-z').value) || 0;
+                let name = document.getElementById('add-view-name').value.trim();
+
+                if (x === 0 && y === 0 && z === 0) {
+                    showToast("X, Y, Z 不能同时为 0！");
+                    return;
+                }
+
+                if (!name) {
+                    name = `精确视角_${x}_${y}_${z}`;
+                }
+
+                addViewConfig(name, [x, y, z]);
+                document.getElementById('add-view-name').value = '';
+            });
+
+            const btnTransparent = document.getElementById('bg-transparent');
+            const btnDark = document.getElementById('bg-dark');
+            const btnLight = document.getElementById('bg-light');
+            const customColorContainer = document.getElementById('custom-color-container');
+            const colorPicker = document.getElementById('setting-bg-color');
+
+            function updateBgActiveUI(activeBtn) {
+                [btnTransparent, btnDark, btnLight].forEach(btn => {
+                    btn.classList.remove('bg-zinc-800', 'border-zinc-500', 'text-zinc-100');
+                    btn.classList.add('bg-zinc-950', 'border-zinc-800', 'text-zinc-400');
+                });
+                if (activeBtn) {
+                    activeBtn.classList.remove('bg-zinc-950', 'border-zinc-800', 'text-zinc-400');
+                    activeBtn.classList.add('bg-zinc-800', 'border-zinc-500', 'text-zinc-100');
+                }
+            }
+
+            btnTransparent.addEventListener('click', () => {
+                currentBgMode = 'transparent';
+                updateBgActiveUI(btnTransparent);
+                customColorContainer.classList.add('hidden');
+                renderer.setClearColor(0x000000, 0);
+            });
+
+            btnDark.addEventListener('click', () => {
+                currentBgMode = 'dark';
+                updateBgActiveUI(btnDark);
+                customColorContainer.classList.add('hidden');
+                renderer.setClearColor(0x09090b, 1);
+            });
+
+            btnLight.addEventListener('click', () => {
+                currentBgMode = 'light';
+                updateBgActiveUI(btnLight);
+                customColorContainer.classList.add('hidden');
+                renderer.setClearColor(0xf4f4f5, 1);
+            });
+
+            colorPicker.addEventListener('input', (e) => {
+                currentBgMode = 'custom';
+                updateBgActiveUI(null);
+                customColorContainer.classList.remove('hidden');
+                document.getElementById('color-hex').textContent = e.target.value.toUpperCase();
+                renderer.setClearColor(new THREE.Color(e.target.value), 1);
+            });
+            colorPicker.addEventListener('click', () => {
+                currentBgMode = 'custom';
+                updateBgActiveUI(null);
+                customColorContainer.classList.remove('hidden');
+            });
+
+            document.getElementById('setting-resolution').addEventListener('change', (e) => {
+                currentResolution = parseInt(e.target.value);
+            });
+
+            const ambientSlider = document.getElementById('setting-ambient');
+            ambientSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                ambientLight.intensity = val;
+                document.getElementById('ambient-intensity-val').textContent = val.toFixed(1);
+            });
+
+            const directionalSlider = document.getElementById('setting-directional');
+            directionalSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                headlight.intensity = val;
+                document.getElementById('directional-intensity-val').textContent = val.toFixed(1);
+            });
+
+            document.getElementById('btn-generate').addEventListener('click', captureAllViews);
+            document.getElementById('btn-download-all').addEventListener('click', downloadAllAsZip);
+
+            document.getElementById('modal-close').addEventListener('click', closeModal);
+            document.getElementById('modal-viewer').addEventListener('click', (e) => {
+                if (e.target.id === 'modal-viewer') closeModal();
+            });
+        });
+    </script>
+</body>
+</html>
